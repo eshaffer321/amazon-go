@@ -1,0 +1,9 @@
+# Curl commands with cookies (sensitive)
+curls/
+*.txt
+
+# Test data with personal info
+internal/testdata/*.html
+
+# Cookie storage
+cookies*.json
