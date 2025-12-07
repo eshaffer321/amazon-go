@@ -291,6 +291,23 @@ func (c *Client) HealthCheck() error {
 		return fmt.Errorf("health check failed: unexpected status %d", resp.StatusCode)
 	}
 
+	// Read body to check if we got the actual orders page or a login redirect
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("health check failed: could not read response: %w", err)
+	}
+
+	bodyStr := string(body)
+
+	// Amazon returns 200 with login page when cookies are expired
+	// Check for login form fields (ap_email input) - NOT just /ap/signin which appears in nav
+	isLoginPage := (strings.Contains(bodyStr, "ap_email") || strings.Contains(bodyStr, "ap_password")) &&
+		!strings.Contains(bodyStr, "order-card")
+
+	if isLoginPage {
+		return fmt.Errorf("authentication failed: cookies are expired, please re-import cookies from browser")
+	}
+
 	return nil
 }
 

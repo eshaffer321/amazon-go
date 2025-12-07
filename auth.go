@@ -207,9 +207,18 @@ func ExtractFromCurl(curlCmd string) ([]*Cookie, error) {
 	// Match -b or --cookie followed by the cookie string
 	// Handles: -b 'cookies', -b "cookies", and -b cookies (unquoted until next flag or newline)
 
-	// Try quoted first
-	cookieRegex := regexp.MustCompile(`(?:-b|--cookie)\s+['"]([^'"]+)['"]`)
-	matches := cookieRegex.FindStringSubmatch(curlCmd)
+	// Try single-quoted first (most common from "Copy as cURL")
+	// This allows double quotes inside the value (e.g., x-main="...")
+	singleQuoteRegex := regexp.MustCompile(`(?:-b|--cookie)\s+'([^']+)'`)
+	matches := singleQuoteRegex.FindStringSubmatch(curlCmd)
+
+	if len(matches) >= 2 {
+		return parseCookieString(matches[1]), nil
+	}
+
+	// Try double-quoted (allows single quotes inside)
+	doubleQuoteRegex := regexp.MustCompile(`(?:-b|--cookie)\s+"([^"]+)"`)
+	matches = doubleQuoteRegex.FindStringSubmatch(curlCmd)
 
 	if len(matches) >= 2 {
 		return parseCookieString(matches[1]), nil
