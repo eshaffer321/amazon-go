@@ -1,16 +1,51 @@
 # amazon-go
 
+> **Project Status: Archived**
+>
+> As of December 2024, Amazon has implemented client-side encryption on their order history pages. Order data is now encrypted in the HTML and decrypted via JavaScript in the browser (`SiegeClientSideDecryption`). This means server-side HTML parsing no longer works - the raw HTML contains encrypted blobs instead of order details.
+>
+> **Alternative approach:** Use a browser extension that can read the DOM after JavaScript has decrypted the content. See [monarchmoney-sync-backend](https://github.com/eshaffer321/monarchmoney-sync-backend) for the project that will handle Amazon order syncing via a different method.
+
+---
+
 Go library for fetching Amazon order history and payment transactions by parsing HTML pages.
 
 Amazon doesn't expose a JSON API for order history - pages are server-side rendered HTML. This library uses goquery to parse the HTML and extract order data.
 
-## Installation
+## Why This Doesn't Work Anymore
+
+Amazon now encrypts order data in the HTML response:
+
+```html
+<div class="order-card js-order-card">
+  <div class="csd-encrypted-sensitive" id="...">
+    <script>
+      SiegeClientSideDecryption.decryptInElementWithId(elementId, {
+        "ct": "S9XspR+u8Ori3uoQzMMh4k4SiVDD...", // encrypted order data
+        "iv": "V5t1PF1IfzPo+xrD",
+        "kid": "c3a22d"
+      });
+    </script>
+  </div>
+</div>
+```
+
+The `.order-card` elements exist, but their contents are encrypted ciphertext that requires JavaScript execution to decrypt. Without running a full browser, you can't access the order IDs, dates, totals, or items.
+
+---
+
+## Original Documentation (for reference)
+
+<details>
+<summary>Click to expand original usage docs</summary>
+
+### Installation
 
 ```bash
 go get github.com/eshaffer321/amazon-go
 ```
 
-## Authentication
+### Authentication
 
 The library uses cookie-based authentication. Extract cookies from your browser:
 
@@ -28,7 +63,7 @@ client.ImportCookiesFromCurl(curlCommand)
 // Cookies are saved to ~/.amazon-go/cookies.json
 ```
 
-## Usage
+### Usage
 
 ```go
 client, _ := amazon.NewClient()
@@ -47,7 +82,7 @@ for _, order := range orders {
 }
 ```
 
-## Transactions
+### Transactions
 
 Amazon orders can have multiple payment transactions (split shipments, partial charges, etc). This is important for matching bank/credit card transactions to orders.
 
@@ -61,24 +96,7 @@ for _, tx := range transactions {
 }
 ```
 
-Example: an order totaling $111.30 might have three transactions:
-- $52.55 charged Nov 25 (Prime Visa ****1211)
-- $50.72 charged Nov 25 (Prime Visa ****1211)
-- $8.03 charged Nov 24 (Amazon Visa points)
-
-## Multiple accounts
-
-```go
-// Each account gets its own cookie file
-personalClient, _ := amazon.NewClient(amazon.WithAccount("personal"))
-workClient, _ := amazon.NewClient(amazon.WithAccount("work"))
-
-// Cookies stored at:
-// ~/.amazon-go/cookies-personal.json
-// ~/.amazon-go/cookies-work.json
-```
-
-## Data structures
+### Data structures
 
 ```go
 type Order struct {
@@ -111,33 +129,4 @@ type Transaction struct {
 }
 ```
 
-## Client options
-
-```go
-client, _ := amazon.NewClient(
-    amazon.WithAccount("personal"),           // multi-account support
-    amazon.WithCookieFile("/custom/path"),    // custom cookie location
-    amazon.WithRateLimit(2*time.Second),      // default is 1s
-    amazon.WithMaxRetries(3),
-    amazon.WithLogger(slog.Default()),
-)
-```
-
-## Fetch options
-
-```go
-orders, _ := client.FetchOrders(ctx, amazon.FetchOptions{
-    Year:           2025,              // specific year
-    StartDate:      time.Time{},       // or date range
-    EndDate:        time.Time{},
-    MaxOrders:      50,                // limit results
-    IncludeDetails: true,              // fetch item details (slower)
-})
-```
-
-## Limitations
-
-- Requires manual cookie extraction from browser
-- Only supports amazon.com (not international)
-- HTML parsing may break if Amazon changes their page structure
-- Rate limited by default to avoid detection
+</details>
