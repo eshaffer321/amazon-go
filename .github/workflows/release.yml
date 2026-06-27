@@ -1,0 +1,91 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify tag and changelog
+        id: notes
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const tag = context.ref.replace('refs/tags/', '');
+            if (!/^v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(tag)) {
+              core.setFailed(`Tag ${tag} is not a SemVer v* tag`);
+              return;
+            }
+
+            const version = tag.slice(1);
+            const changelog = fs.readFileSync('CHANGELOG.md', 'utf8');
+            const heading = new RegExp(`^## \\[${version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\](?:\\s+-\\s+.*)?$`, 'm');
+            const match = changelog.match(heading);
+            if (!match || match.index === undefined) {
+              core.setFailed(`CHANGELOG.md is missing a section for ${version}`);
+              return;
+            }
+
+            const start = match.index + match[0].length;
+            const rest = changelog.slice(start);
+            const next = rest.search(/^## \[/m);
+            const body = (next >= 0 ? rest.slice(0, next) : rest).trim();
+            if (!body) {
+              core.setFailed(`CHANGELOG.md section for ${version} is empty`);
+              return;
+            }
+
+            fs.writeFileSync('release-notes.md', body + '\n');
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Check formatting
+        run: |
+          files="$(gofmt -l $(find . -name '*.go' -not -path './.git/*'))"
+          if [ -n "$files" ]; then
+            echo "These files need gofmt:"
+            echo "$files"
+            exit 1
+          fi
+
+      - name: Check go.mod and go.sum
+        run: |
+          tmp="$(mktemp -d)"
+          cp go.mod "$tmp/go.mod"
+          cp go.sum "$tmp/go.sum"
+          go mod tidy
+          if ! cmp -s go.mod "$tmp/go.mod" || ! cmp -s go.sum "$tmp/go.sum"; then
+            echo "go.mod or go.sum changed after go mod tidy"
+            diff -u "$tmp/go.mod" go.mod || true
+            diff -u "$tmp/go.sum" go.sum || true
+            exit 1
+          fi
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test with race detector
+        run: go test -race ./...
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" --notes-file release-notes.md --verify-tag

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Added `cmd/amazon-go` helper CLI with commands for browser-assisted setup, Arc cookie import, and auth checking.
+- Added macOS Arc profile discovery and cookie import, including multi-profile account storage like `cookies-arc-profile-1.json`.
+- Added safer example flags for stdin/file cookie imports and account-specific fetching.
+- Added CI quality gates, release workflow, pull request checklist, and documented release process.
+
+### Changed
+- Order scraping now uses Amazon's legacy no-JS order history and printable order detail pages instead of the encrypted modern `/your-orders` pages.
+- A bare example fetch now tries all authenticated imported Arc accounts when no explicit account or cookie file is provided.
+- README now documents the current setup, limitations, and release-ready usage flow.
+
+### Fixed
+- Fixed printable order detail fetching so the requested order ID is preserved.
+- Improved parsing of legacy order cards, printable order detail pages, and Chromium cookie values with host digest prefixes.
+
 ## [0.1.0] - 2025-12-06
 
 ### Fixed

@@ -122,12 +122,12 @@ func (i *OrderItem) GetCategory() string {
 
 // OrderSummary represents basic order info from the order list page
 type OrderSummary struct {
-	ID         string
-	Date       time.Time
-	Total      float64
-	ItemCount  int
-	ItemNames  []string
-	DetailURL  string
+	ID        string
+	Date      time.Time
+	Total     float64
+	ItemCount int
+	ItemNames []string
+	DetailURL string
 }
 
 // Transaction represents a payment transaction for an order

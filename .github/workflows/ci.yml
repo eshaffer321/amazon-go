@@ -6,18 +6,57 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  quality:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version-file: go.mod
+          cache: true
+
+      - name: Show Go version
+        run: go version
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Check formatting
+        run: |
+          files="$(gofmt -l $(find . -name '*.go' -not -path './.git/*'))"
+          if [ -n "$files" ]; then
+            echo "These files need gofmt:"
+            echo "$files"
+            exit 1
+          fi
+
+      - name: Check go.mod and go.sum
+        run: |
+          tmp="$(mktemp -d)"
+          cp go.mod "$tmp/go.mod"
+          cp go.sum "$tmp/go.sum"
+          go mod tidy
+          if ! cmp -s go.mod "$tmp/go.mod" || ! cmp -s go.sum "$tmp/go.sum"; then
+            echo "go.mod or go.sum changed after go mod tidy"
+            diff -u "$tmp/go.mod" go.mod || true
+            diff -u "$tmp/go.sum" go.sum || true
+            exit 1
+          fi
 
       - name: Build
         run: go build ./...
 
-      - name: Test
-        run: go test ./... -v
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test with race detector
+        run: go test -race ./...

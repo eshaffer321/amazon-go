@@ -7,3 +7,7 @@ internal/testdata/*.html
 
 # Cookie storage
 cookies*.json
+
+# Local scratch artifacts
+*.db
+examples/examples

@@ -25,17 +25,23 @@ func (p *Parser) ParseOrderList(r io.Reader) ([]*OrderSummary, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse HTML: %w", err)
 	}
+	if isAmazonLoginPage(doc) {
+		return nil, fmt.Errorf("amazon session expired: received sign-in page")
+	}
 
 	var orders []*OrderSummary
 
-	// Find all order cards
-	doc.Find(".order-card").Each(func(i int, s *goquery.Selection) {
+	// Find all order cards. The legacy no-JS page uses .js-order-card and still
+	// exposes orderID links even when newer /your-orders pages encrypt content.
+	doc.Find(".js-order-card, .order-card").Each(func(i int, s *goquery.Selection) {
 		order, err := p.parseOrderCard(s)
 		if err != nil {
 			// Log error but continue parsing other orders
 			return
 		}
-		orders = append(orders, order)
+		if order.ID != "" && !strings.HasPrefix(order.ID, "D0") {
+			orders = append(orders, order)
+		}
 	})
 
 	return orders, nil
@@ -46,13 +52,24 @@ func (p *Parser) parseOrderCard(s *goquery.Selection) (*OrderSummary, error) {
 	order := &OrderSummary{}
 
 	// Extract order ID from the order-id div or link
-	// Look for order details link which contains the order ID
-	detailLink := s.Find("a[href*='order-details']").First()
+	// Look for links with orderID, which are present on the legacy no-JS page.
+	detailLink := s.Find("a[href*='orderID=']").First()
 	if href, exists := detailLink.Attr("href"); exists {
-		order.DetailURL = "https://www.amazon.com" + href
+		order.DetailURL = absoluteAmazonURL(href)
 		// Extract order ID from URL
 		if id := extractOrderIDFromURL(href); id != "" {
 			order.ID = id
+		}
+	}
+
+	// Fallback for the modern page shape.
+	if order.ID == "" {
+		detailLink = s.Find("a[href*='order-details']").First()
+		if href, exists := detailLink.Attr("href"); exists {
+			order.DetailURL = absoluteAmazonURL(href)
+			if id := extractOrderIDFromURL(href); id != "" {
+				order.ID = id
+			}
 		}
 	}
 
@@ -76,6 +93,14 @@ func (p *Parser) parseOrderCard(s *goquery.Selection) (*OrderSummary, error) {
 			}
 		}
 	})
+	if order.Date.IsZero() {
+		text := normalizedText(s)
+		if dateText := findDateText(text); dateText != "" {
+			if date, err := parseAmazonDate(dateText); err == nil {
+				order.Date = date
+			}
+		}
+	}
 
 	// Extract order total
 	// Look for "Order Total" or total amount in header
@@ -87,6 +112,11 @@ func (p *Parser) parseOrderCard(s *goquery.Selection) (*OrderSummary, error) {
 			}
 		}
 	})
+	if order.Total == 0 {
+		if total := parseLabeledPrice(normalizedText(s), `(?i)Order\s+Total`); total > 0 {
+			order.Total = total
+		}
+	}
 
 	// Count items and extract item names
 	s.Find(".item-box").Each(func(i int, item *goquery.Selection) {
@@ -118,6 +148,9 @@ func (p *Parser) ParseOrderDetails(r io.Reader) (*Order, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse HTML: %w", err)
 	}
+	if isAmazonLoginPage(doc) {
+		return nil, fmt.Errorf("amazon session expired: received sign-in page")
+	}
 
 	order := &Order{}
 
@@ -143,9 +176,11 @@ func (p *Parser) ParseOrderDetails(r io.Reader) (*Order, error) {
 
 	// Parse order summary section for pricing
 	p.parseOrderSummary(doc, order)
+	p.parseLegacyOrderSummary(doc, order)
 
 	// Parse items from shipments
 	p.parseShipmentItems(doc, order)
+	p.parseLegacyItems(doc, order)
 
 	return order, nil
 }
@@ -183,6 +218,65 @@ func (p *Parser) parseOrderSummary(doc *goquery.Document, order *Order) {
 			}
 		})
 	}
+}
+
+// parseLegacyOrderSummary extracts totals from Amazon's printable order
+// summary page (/gp/css/summary/print.html).
+func (p *Parser) parseLegacyOrderSummary(doc *goquery.Document, order *Order) {
+	text := normalizedText(doc.Selection)
+
+	if order.ID == "" {
+		order.ID = extractOrderIDFromText(text)
+	}
+	if order.Date.IsZero() {
+		if dateText := findDateText(text); dateText != "" {
+			if date, err := parseAmazonDate(dateText); err == nil {
+				order.Date = date
+			}
+		}
+	}
+	if order.Subtotal == 0 {
+		order.Subtotal = parseLabeledPrice(text, `(?i)(Item\(s\)\s+Subtotal|Items?\s+Subtotal|Subtotal)`)
+	}
+	if order.ShippingFees == 0 {
+		order.ShippingFees = parseLabeledPrice(text, `(?i)(Shipping\s*&\s*Handling|Shipping|Delivery)`)
+	}
+	if order.Tax == 0 {
+		order.Tax = parseLabeledPrice(text, `(?i)(Estimated\s+tax|Tax)`)
+	}
+	if order.Total == 0 {
+		order.Total = parseLabeledPrice(text, `(?i)(Grand\s+Total|Order\s+Total)`)
+	}
+}
+
+func (p *Parser) parseLegacyItems(doc *goquery.Document, order *Order) {
+	if len(order.Items) > 0 {
+		return
+	}
+
+	seenASINs := make(map[string]bool)
+	doc.Find("a[href*='/dp/'], a[href*='asin=']").Each(func(i int, link *goquery.Selection) {
+		href, exists := link.Attr("href")
+		if !exists {
+			return
+		}
+		asin := extractASINFromURL(href)
+		if asin == "" || seenASINs[asin] {
+			return
+		}
+
+		name := strings.TrimSpace(link.Text())
+		if name == "" || len(name) < 5 {
+			return
+		}
+
+		seenASINs[asin] = true
+		order.Items = append(order.Items, &OrderItem{
+			ASIN:     asin,
+			Name:     name,
+			Quantity: 1,
+		})
+	})
 }
 
 // parseShipmentItems extracts items from shipment sections
@@ -273,7 +367,7 @@ func (p *Parser) parseShipmentItems(doc *goquery.Document, order *Order) {
 // extractOrderIDFromURL extracts order ID from a URL query parameter
 func extractOrderIDFromURL(url string) string {
 	// Match orderID=XXX-XXXXXXX-XXXXXXX
-	re := regexp.MustCompile(`orderID=(\d{3}-\d{7}-\d{7})`)
+	re := regexp.MustCompile(`(?i)orderID=([^&#]+)`)
 	matches := re.FindStringSubmatch(url)
 	if len(matches) > 1 {
 		return matches[1]
@@ -397,6 +491,41 @@ func parseAmazonDate(text string) (time.Time, error) {
 	}
 
 	return time.Time{}, fmt.Errorf("unable to parse date: %s", text)
+}
+
+func absoluteAmazonURL(href string) string {
+	if strings.HasPrefix(href, "http://") || strings.HasPrefix(href, "https://") {
+		return href
+	}
+	if strings.HasPrefix(href, "/") {
+		return "https://www.amazon.com" + href
+	}
+	return href
+}
+
+func normalizedText(s *goquery.Selection) string {
+	return strings.Join(strings.Fields(s.Text()), " ")
+}
+
+func findDateText(text string) string {
+	monthPattern := `(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec)`
+	re := regexp.MustCompile(monthPattern + `\s+\d{1,2},\s+\d{4}`)
+	return re.FindString(text)
+}
+
+func parseLabeledPrice(text, labelPattern string) float64 {
+	re := regexp.MustCompile(labelPattern + `[^$-]*(-?\$[0-9,]+(?:\.[0-9]{2})?)`)
+	matches := re.FindStringSubmatch(text)
+	if len(matches) == 0 {
+		return 0
+	}
+	return parsePrice(matches[len(matches)-1])
+}
+
+func isAmazonLoginPage(doc *goquery.Document) bool {
+	text := doc.Text()
+	return strings.Contains(text, "Sign in") &&
+		(doc.Find("input#ap_email, input[name='email'], input#ap_password, input[name='password']").Length() > 0)
 }
 
 // ParseTransactions parses the transactions page for an order

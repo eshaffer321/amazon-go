@@ -12,8 +12,8 @@ import (
 
 const (
 	baseURL           = "https://www.amazon.com"
-	ordersURL         = baseURL + "/your-orders/orders"
-	orderDetailsURL   = baseURL + "/your-orders/order-details"
+	ordersURL         = baseURL + "/gp/css/order-history?disableCsd=no-js"
+	orderDetailsURL   = baseURL + "/gp/css/summary/print.html"
 	transactionsURL   = baseURL + "/cpe/yourpayments/transactions"
 	defaultRateLimit  = 1 * time.Second
 	defaultTimeout    = 30 * time.Second
@@ -302,7 +302,8 @@ func (c *Client) HealthCheck() error {
 	// Amazon returns 200 with login page when cookies are expired
 	// Check for login form fields (ap_email input) - NOT just /ap/signin which appears in nav
 	isLoginPage := (strings.Contains(bodyStr, "ap_email") || strings.Contains(bodyStr, "ap_password")) &&
-		!strings.Contains(bodyStr, "order-card")
+		!strings.Contains(bodyStr, "js-order-card") &&
+		!strings.Contains(bodyStr, "Your Orders")
 
 	if isLoginPage {
 		return fmt.Errorf("authentication failed: cookies are expired, please re-import cookies from browser")
@@ -319,4 +320,9 @@ func (c *Client) SaveCookies() error {
 // ImportCookiesFromCurl imports cookies from a curl command string
 func (c *Client) ImportCookiesFromCurl(curlCmd string) error {
 	return c.cookieStore.ImportFromCurl(curlCmd)
+}
+
+// ImportCookiesFromHeader imports cookies from a raw Cookie header string
+func (c *Client) ImportCookiesFromHeader(header string) error {
+	return c.cookieStore.ImportFromCookieHeader(header)
 }
