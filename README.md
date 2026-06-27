@@ -1,102 +1,189 @@
 # amazon-go
 
-> **Project Status: Archived**
->
-> As of December 2024, Amazon has implemented client-side encryption on their order history pages. Order data is now encrypted in the HTML and decrypted via JavaScript in the browser (`SiegeClientSideDecryption`). This means server-side HTML parsing no longer works - the raw HTML contains encrypted blobs instead of order details.
->
-> **Alternative approach:** Use a browser extension that can read the DOM after JavaScript has decrypted the content. See [monarchmoney-sync-backend](https://github.com/eshaffer321/monarchmoney-sync-backend) for the project that will handle Amazon order syncing via a different method.
+Go library and helper CLI for fetching Amazon order history by parsing Amazon's HTML order pages.
 
----
+## What Works Now
 
-Go library for fetching Amazon order history and payment transactions by parsing HTML pages.
+Amazon's modern `/your-orders/...` pages can contain client-side encrypted order data, which makes plain server-side parsing unreliable. This library uses Amazon's older no-JS order pages instead:
 
-Amazon doesn't expose a JSON API for order history - pages are server-side rendered HTML. This library uses goquery to parse the HTML and extract order data.
+- Order history: `https://www.amazon.com/gp/css/order-history?disableCsd=no-js`
+- Printable order details: `https://www.amazon.com/gp/css/summary/print.html?orderID=...`
 
-## Why This Doesn't Work Anymore
+The parser does not need a browser once it has a valid logged-in Amazon cookie set. Authentication still comes from a real browser session.
 
-Amazon now encrypts order data in the HTML response:
-
-```html
-<div class="order-card js-order-card">
-  <div class="csd-encrypted-sensitive" id="...">
-    <script>
-      SiegeClientSideDecryption.decryptInElementWithId(elementId, {
-        "ct": "S9XspR+u8Ori3uoQzMMh4k4SiVDD...", // encrypted order data
-        "iv": "V5t1PF1IfzPo+xrD",
-        "kid": "c3a22d"
-      });
-    </script>
-  </div>
-</div>
-```
-
-The `.order-card` elements exist, but their contents are encrypted ciphertext that requires JavaScript execution to decrypt. Without running a full browser, you can't access the order IDs, dates, totals, or items.
-
----
-
-## Original Documentation (for reference)
-
-<details>
-<summary>Click to expand original usage docs</summary>
-
-### Installation
+## Install
 
 ```bash
 go get github.com/eshaffer321/amazon-go
 ```
 
-### Authentication
+## Quick Start: Arc on macOS
 
-The library uses cookie-based authentication. Extract cookies from your browser:
+If you use Arc on macOS, the easiest setup is importing the Amazon cookies from your existing Arc profiles:
 
-1. Log into Amazon in your browser
-2. Go to https://www.amazon.com/your-orders/orders
-3. Open DevTools (F12) -> Network tab
-4. Refresh the page
-5. Right-click the main request -> Copy as cURL
-
-Then import the cookies:
-
-```go
-client, _ := amazon.NewClient()
-client.ImportCookiesFromCurl(curlCommand)
-// Cookies are saved to ~/.amazon-go/cookies.json
+```bash
+go run ./cmd/amazon-go import-arc
 ```
 
-### Usage
+By default, this scans every Arc profile under:
+
+```text
+~/Library/Application Support/Arc/User Data
+```
+
+Each usable profile is validated and saved as a separate amazon-go account, for example:
+
+```text
+~/.amazon-go/cookies-arc-profile-1.json
+```
+
+Then fetch orders:
+
+```bash
+YEAR=$(date +%Y)
+go run ./examples/fetch_orders.go -year "$YEAR" -details -max 10
+```
+
+With no `-account` or `-cookie-file`, the example command automatically tries every imported `cookies-arc-*.json` account it can authenticate. Expired or signed-out profiles are skipped.
+
+To fetch one imported profile explicitly:
+
+```bash
+YEAR=$(date +%Y)
+go run ./examples/fetch_orders.go -account arc-profile-1 -year "$YEAR" -details -max 10
+```
+
+To import one Arc profile with a custom account name:
+
+```bash
+go run ./cmd/amazon-go import-arc \
+  -profile "$HOME/Library/Application Support/Arc/User Data/Profile 1/Cookies" \
+  -account personal
+```
+
+## Browser Setup Fallback
+
+If Arc import is not available, `setup-session` opens a dedicated Chromium profile, waits while you log into Amazon if needed, and saves the cookies into `~/.amazon-go/cookies.json`.
+
+```bash
+go run ./cmd/amazon-go setup-session
+go run ./cmd/amazon-go check-auth
+```
+
+The dedicated browser profile lives at:
+
+```text
+~/.amazon-go/browser-profile
+```
+
+## Manual Cookie Import
+
+You can also import cookies from a copied browser request.
+
+1. Log into Amazon in your browser.
+2. Open `https://www.amazon.com/gp/css/order-history?disableCsd=no-js`.
+3. Open DevTools, then the Network tab.
+4. Refresh the page.
+5. Right-click the main request and choose "Copy as cURL".
+
+Recommended, to avoid putting cookies in shell history:
+
+```bash
+pbpaste | go run ./examples/fetch_orders.go -import-curl-file -
+go run ./examples/fetch_orders.go -check-auth
+```
+
+You can also import a raw `Cookie:` header:
+
+```bash
+pbpaste | go run ./examples/fetch_orders.go -import-cookie-file -
+```
+
+## Library Usage
 
 ```go
-client, _ := amazon.NewClient()
+package main
 
-// Fetch orders with item details
-orders, _ := client.FetchOrders(ctx, amazon.FetchOptions{
-    Year:           2025,
-    IncludeDetails: true,
-})
+import (
+    "context"
+    "fmt"
+    "time"
 
-for _, order := range orders {
-    fmt.Printf("Order %s - $%.2f\n", order.ID, order.Total)
-    for _, item := range order.Items {
-        fmt.Printf("  %s - $%.2f\n", item.Name, item.Price)
+    amazon "github.com/eshaffer321/amazon-go"
+)
+
+func main() {
+    client, err := amazon.NewClient(amazon.WithAccount("arc-profile-1"))
+    if err != nil {
+        panic(err)
+    }
+
+    orders, err := client.FetchOrders(context.Background(), amazon.FetchOptions{
+        Year:           time.Now().Year(),
+        IncludeDetails: true,
+    })
+    if err != nil {
+        panic(err)
+    }
+
+    for _, order := range orders {
+        fmt.Printf("Order %s - $%.2f\n", order.GetID(), order.GetTotal())
+        for _, item := range order.GetItems() {
+            fmt.Printf("  %s - $%.2f\n", item.GetName(), item.GetPrice())
+        }
     }
 }
 ```
 
-### Transactions
+## Multiple Accounts
 
-Amazon orders can have multiple payment transactions (split shipments, partial charges, etc). This is important for matching bank/credit card transactions to orders.
+`amazon-go` supports multiple cookie jars through account names:
 
 ```go
-// Get transactions for an order
-transactions, _ := client.FetchTransactions(ctx, "114-1234567-1234567")
+client, err := amazon.NewClient(amazon.WithAccount("personal"))
+```
+
+That stores cookies at:
+
+```text
+~/.amazon-go/cookies-personal.json
+```
+
+The Arc importer uses this mechanism automatically. It handles multiple browser profiles, not Amazon's in-page "Switch Accounts" menu. If one browser profile can switch between two Amazon identities, `amazon-go` fetches whichever identity is currently active for that cookie jar.
+
+For reliable multi-account scraping, use one browser profile per Amazon account, then run:
+
+```bash
+go run ./cmd/amazon-go import-arc
+go run ./examples/fetch_orders.go -details
+```
+
+## Transactions
+
+Amazon orders can have multiple payment transactions, such as split shipments or partial charges. The client exposes transaction fetching separately:
+
+```go
+transactions, err := client.FetchTransactions(ctx, "114-1234567-1234567")
+if err != nil {
+    panic(err)
+}
 
 for _, tx := range transactions {
-    fmt.Printf("%s: $%.2f on %s (card ending %s)\n",
-        tx.OrderID, tx.Amount, tx.Date.Format("Jan 2"), tx.LastFour)
+    fmt.Printf("%s: $%.2f on %s\n", tx.OrderID, tx.Amount, tx.Date.Format("Jan 2"))
 }
 ```
 
-### Data structures
+Order summary and item-detail scraping are the primary verified path. Transaction pages can be more variable and should be tested against your account before relying on them for reconciliation.
+
+## Limitations
+
+- Amazon can change these HTML pages at any time.
+- Cookies expire and may need to be re-imported.
+- Arc cookie import is macOS and Arc specific.
+- The CLI does not automatically enumerate Amazon's "Switch Accounts" identities inside one browser session.
+- Keep exported cookie files private. They are bearer credentials for your Amazon session.
+
+## Data Structures
 
 ```go
 type Order struct {
@@ -111,22 +198,20 @@ type Order struct {
 
 type OrderItem struct {
     Name      string
-    Price     float64   // line total
+    Price     float64
     Quantity  float64
     UnitPrice float64
-    ASIN      string    // Amazon product ID
+    ASIN      string
 }
 
 type Transaction struct {
-    OrderID       string    // links to Order.ID
-    Date          time.Time // when charged (may differ from order date)
+    OrderID       string
+    Date          time.Time
     Amount        float64
-    PaymentMethod string    // e.g. "Prime Visa ****1211"
-    CardType      string    // Visa, Mastercard, Amex, etc.
-    LastFour      string    // last 4 digits of card
-    Merchant      string    // e.g. "AMZN Mktp US"
-    Status        string    // Completed, Pending, etc.
+    PaymentMethod string
+    CardType      string
+    LastFour      string
+    Merchant      string
+    Status        string
 }
 ```
-
-</details>

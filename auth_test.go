@@ -29,6 +29,38 @@ func TestExtractFromCurl(t *testing.T) {
 	}
 }
 
+func TestExtractFromCurl_CookieHeader(t *testing.T) {
+	curlCmd := `curl 'https://www.amazon.com/gp/css/order-history?disableCsd=no-js' -H 'accept: text/html' -H 'cookie: session-id=123-456; ubid-main=abc-def; at-main=Atza|token'`
+
+	cookies, err := ExtractFromCurl(curlCmd)
+	if err != nil {
+		t.Fatalf("ExtractFromCurl failed: %v", err)
+	}
+
+	if len(cookies) != 3 {
+		t.Errorf("Expected 3 cookies, got %d", len(cookies))
+	}
+
+	if cookies[0].Name != "session-id" {
+		t.Errorf("Expected first cookie to be session-id, got %s", cookies[0].Name)
+	}
+}
+
+func TestExtractFromCookieHeader(t *testing.T) {
+	cookies, err := ExtractFromCookieHeader("Cookie: session-id=123-456; ubid-main=abc-def")
+	if err != nil {
+		t.Fatalf("ExtractFromCookieHeader failed: %v", err)
+	}
+
+	if len(cookies) != 2 {
+		t.Errorf("Expected 2 cookies, got %d", len(cookies))
+	}
+
+	if cookies[1].Name != "ubid-main" {
+		t.Errorf("Expected second cookie to be ubid-main, got %s", cookies[1].Name)
+	}
+}
+
 func TestExtractFromCurl_NoMatch(t *testing.T) {
 	curlCmd := `curl 'https://www.amazon.com/your-orders/orders'`
 
@@ -145,6 +177,25 @@ func TestImportFromCurl(t *testing.T) {
 	}
 
 	// Verify file was saved
+	if _, err := os.Stat(cookieFile); os.IsNotExist(err) {
+		t.Error("Cookie file should exist after import")
+	}
+}
+
+func TestImportFromCookieHeader(t *testing.T) {
+	tmpDir := t.TempDir()
+	cookieFile := filepath.Join(tmpDir, "cookies.json")
+
+	store, _ := NewCookieStore(cookieFile)
+
+	if err := store.ImportFromCookieHeader("Cookie: session-id=test123; ubid-main=xyz789"); err != nil {
+		t.Fatalf("ImportFromCookieHeader failed: %v", err)
+	}
+
+	if store.Count() != 2 {
+		t.Errorf("Expected 2 cookies, got %d", store.Count())
+	}
+
 	if _, err := os.Stat(cookieFile); os.IsNotExist(err) {
 		t.Error("Cookie file should exist after import")
 	}

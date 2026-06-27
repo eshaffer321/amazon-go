@@ -232,7 +232,41 @@ func ExtractFromCurl(curlCmd string) ([]*Cookie, error) {
 		return parseCookieString(matches[1]), nil
 	}
 
+	// Chrome/Arc "Copy as cURL" often emits the Cookie header as -H 'cookie: ...'
+	// instead of using -b/--cookie.
+	singleQuoteHeaderRegex := regexp.MustCompile(`(?i)-H\s+'cookie:\s*([^']+)'`)
+	matches = singleQuoteHeaderRegex.FindStringSubmatch(curlCmd)
+
+	if len(matches) >= 2 {
+		return ExtractFromCookieHeader(matches[1])
+	}
+
+	doubleQuoteHeaderRegex := regexp.MustCompile(`(?i)-H\s+"cookie:\s*([^"]+)"`)
+	matches = doubleQuoteHeaderRegex.FindStringSubmatch(curlCmd)
+
+	if len(matches) >= 2 {
+		return ExtractFromCookieHeader(matches[1])
+	}
+
 	return nil, fmt.Errorf("no cookies found in curl command")
+}
+
+// ExtractFromCookieHeader parses a raw Cookie header value into Cookie objects.
+// It accepts either "a=b; c=d" or "Cookie: a=b; c=d".
+func ExtractFromCookieHeader(header string) ([]*Cookie, error) {
+	header = strings.TrimSpace(header)
+	if strings.Contains(header, ":") {
+		parts := strings.SplitN(header, ":", 2)
+		if strings.EqualFold(strings.TrimSpace(parts[0]), "cookie") {
+			header = strings.TrimSpace(parts[1])
+		}
+	}
+
+	cookies := parseCookieString(header)
+	if len(cookies) == 0 {
+		return nil, fmt.Errorf("no cookies found in cookie header")
+	}
+	return cookies, nil
 }
 
 // parseCookieString parses a cookie header string into Cookie objects
@@ -299,6 +333,20 @@ func (s *CookieStore) HasEssentialCookies() bool {
 // ImportFromCurl imports cookies from a curl command and saves them
 func (s *CookieStore) ImportFromCurl(curlCmd string) error {
 	cookies, err := ExtractFromCurl(curlCmd)
+	if err != nil {
+		return err
+	}
+
+	for _, c := range cookies {
+		s.Set(c)
+	}
+
+	return s.Save()
+}
+
+// ImportFromCookieHeader imports cookies from a raw Cookie header and saves them.
+func (s *CookieStore) ImportFromCookieHeader(header string) error {
+	cookies, err := ExtractFromCookieHeader(header)
 	if err != nil {
 		return err
 	}

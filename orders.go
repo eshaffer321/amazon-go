@@ -252,10 +252,9 @@ func (c *Client) fetchOrderDetails(orderID string, parser *Parser) (*Order, erro
 		return nil, fmt.Errorf("failed to parse order details: %w", err)
 	}
 
-	// Ensure order ID is set
-	if order.ID == "" {
-		order.ID = orderID
-	}
+	// The printable summary page can contain other orderID links; the requested
+	// order ID is the reliable identity for this fetch.
+	order.ID = orderID
 
 	return order, nil
 }

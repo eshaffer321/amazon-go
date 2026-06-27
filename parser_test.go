@@ -2,6 +2,7 @@ package amazon
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -35,6 +36,69 @@ func TestParseOrderList(t *testing.T) {
 
 		t.Logf("Order %d: ID=%s, Date=%v, Total=%.2f, Items=%d",
 			i, order.ID, order.Date, order.Total, order.ItemCount)
+	}
+}
+
+func TestParseLegacyOrderList(t *testing.T) {
+	html := `
+		<html><body>
+			<h1>Your Orders</h1>
+			<div class="js-order-card">
+				<div>Order placed November 26, 2025</div>
+				<div>Order Total $42.37</div>
+				<a href="/gp/css/summary/print.html?orderID=114-9733092-9360267">Order details</a>
+			</div>
+			<div class="js-order-card">
+				<a href="/gp/css/summary/print.html?orderID=D01-1234567-1234567">Digital order</a>
+			</div>
+		</body></html>`
+
+	parser := NewParser()
+	orders, err := parser.ParseOrderList(strings.NewReader(html))
+	if err != nil {
+		t.Fatalf("ParseOrderList failed: %v", err)
+	}
+
+	if len(orders) != 1 {
+		t.Fatalf("Expected 1 processable order, got %d", len(orders))
+	}
+	if orders[0].ID != "114-9733092-9360267" {
+		t.Fatalf("Unexpected order ID: %s", orders[0].ID)
+	}
+	if orders[0].Total != 42.37 {
+		t.Fatalf("Unexpected order total: %.2f", orders[0].Total)
+	}
+	if orders[0].Date.IsZero() {
+		t.Fatal("Expected order date to be parsed")
+	}
+}
+
+func TestParseLegacyOrderDetails(t *testing.T) {
+	html := `
+		<html><body>
+			<div>Order #114-9733092-9360267</div>
+			<div>Order placed November 26, 2025</div>
+			<div>Item(s) Subtotal: $40.00</div>
+			<div>Shipping & Handling: $0.00</div>
+			<div>Estimated tax: $2.37</div>
+			<div>Grand Total: $42.37</div>
+			<a href="/dp/B09XV8WDY6">Useful Kitchen Thing</a>
+		</body></html>`
+
+	parser := NewParser()
+	order, err := parser.ParseOrderDetails(strings.NewReader(html))
+	if err != nil {
+		t.Fatalf("ParseOrderDetails failed: %v", err)
+	}
+
+	if order.ID != "114-9733092-9360267" {
+		t.Fatalf("Unexpected order ID: %s", order.ID)
+	}
+	if order.Total != 42.37 {
+		t.Fatalf("Unexpected total: %.2f", order.Total)
+	}
+	if len(order.Items) != 1 || order.Items[0].ASIN != "B09XV8WDY6" {
+		t.Fatalf("Expected legacy item to be parsed, got %#v", order.Items)
 	}
 }
 
