@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-27
+
 ### Added
 - Added `cmd/amazon-go` helper CLI with commands for browser-assisted setup, Arc cookie import, and auth checking.
 - Added macOS Arc profile discovery and cookie import, including multi-profile account storage like `cookies-arc-profile-1.json`.
