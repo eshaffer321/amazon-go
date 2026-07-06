@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-06
+
 ### Changed
 - Replaced the Arc-specific cookie importer and browser setup command with `import-browser-profile`, which exports cookies from an explicitly selected Chromium/Playwright user-data directory.
 - Removed the `chromedp` dependency from the helper CLI; Playwright is used only as an external helper for browser-profile cookie export.
