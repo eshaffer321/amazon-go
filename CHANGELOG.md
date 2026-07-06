@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-06
+
+### Changed
+- Replaced the Arc-specific cookie importer and browser setup command with `import-browser-profile`, which exports cookies from an explicitly selected Chromium/Playwright user-data directory.
+- Removed the `chromedp` dependency from the helper CLI; Playwright is used only as an external helper for browser-profile cookie export.
+- `import-browser-profile` now opens headed Chromium by default for session renewal, supports `-headless` for automation, and normalizes the obvious headless browser fingerprint signals.
+- The example fetcher no longer auto-discovers Arc-imported accounts.
+
+### Fixed
+- `import-browser-profile` now refuses to save cookies when the profile opens an Amazon sign-in page instead of an authenticated orders page.
+- Printable order parsing now reads Amazon's image-overlay quantity marker, so repeated items are returned with the correct line total.
+
 ## [0.2.0] - 2026-06-27
 
 ### Added

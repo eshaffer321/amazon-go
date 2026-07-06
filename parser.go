@@ -343,6 +343,16 @@ func (p *Parser) parseShipmentItems(doc *goquery.Document, order *Order) {
 	})
 
 	// Parse quantities
+	doc.Find(".od-item-view-qty").Each(func(i int, qtyDiv *goquery.Selection) {
+		qtyText := strings.TrimSpace(qtyDiv.Text())
+		qty := parseQuantity(qtyText)
+		if qty > 0 && i < len(order.Items) {
+			order.Items[i].Quantity = qty
+			if order.Items[i].UnitPrice > 0 {
+				order.Items[i].Price = order.Items[i].UnitPrice * qty
+			}
+		}
+	})
 	doc.Find("[data-component='quantity']").Each(func(i int, qtyDiv *goquery.Selection) {
 		qtyText := strings.TrimSpace(qtyDiv.Text())
 		qty := parseQuantity(qtyText)
@@ -441,7 +451,7 @@ func parseQuantity(text string) float64 {
 		}
 	}
 
-	return 1 // Default to 1 if not found
+	return 0
 }
 
 // containsMonth checks if text contains a month name
@@ -523,9 +533,17 @@ func parseLabeledPrice(text, labelPattern string) float64 {
 }
 
 func isAmazonLoginPage(doc *goquery.Document) bool {
+	title := strings.TrimSpace(doc.Find("title").First().Text())
 	text := doc.Text()
-	return strings.Contains(text, "Sign in") &&
-		(doc.Find("input#ap_email, input[name='email'], input#ap_password, input[name='password']").Length() > 0)
+	hasLoginInputs := doc.Find("input#ap_email, input[name='email'], input#ap_password, input[name='password']").Length() > 0
+	return isAmazonLoginText(title) || (strings.Contains(text, "Sign in") && hasLoginInputs)
+}
+
+func isAmazonLoginText(text string) bool {
+	lower := strings.ToLower(text)
+	return strings.Contains(lower, "amazon sign-in") ||
+		strings.Contains(lower, "ap_email") ||
+		strings.Contains(lower, "ap_password")
 }
 
 // ParseTransactions parses the transactions page for an order
