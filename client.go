@@ -299,9 +299,8 @@ func (c *Client) HealthCheck() error {
 
 	bodyStr := string(body)
 
-	// Amazon returns 200 with login page when cookies are expired
-	// Check for login form fields (ap_email input) - NOT just /ap/signin which appears in nav
-	isLoginPage := (strings.Contains(bodyStr, "ap_email") || strings.Contains(bodyStr, "ap_password")) &&
+	// Amazon returns 200 with login page when cookies are expired.
+	isLoginPage := isAmazonLoginText(bodyStr) &&
 		!strings.Contains(bodyStr, "js-order-card") &&
 		!strings.Contains(bodyStr, "Your Orders")
 

@@ -17,64 +17,87 @@ The parser does not need a browser once it has a valid logged-in Amazon cookie s
 go get github.com/eshaffer321/amazon-go
 ```
 
-## Quick Start: Arc on macOS
+## Quick Start: Browser Profile Import
 
-If you use Arc on macOS, the easiest setup is importing the Amazon cookies from your existing Arc profiles:
+The most reliable setup is exporting cookies through a browser profile that is
+already logged into Amazon. This uses Playwright only in the helper CLI; the
+library itself still fetches orders with normal HTTP requests after cookies are
+saved. The exporter opens Chromium visibly by default so Amazon can renew a
+session if needed. Headless export is supported for already-valid profiles, but
+it cannot complete Amazon sign-in, passkey, or MFA challenges.
 
 ```bash
-go run ./cmd/amazon-go import-arc
-```
-
-By default, this scans every Arc profile under:
-
-```text
-~/Library/Application Support/Arc/User Data
-```
-
-Each usable profile is validated and saved as a separate amazon-go account, for example:
-
-```text
-~/.amazon-go/cookies-arc-profile-1.json
+go run ./cmd/amazon-go import-browser-profile \
+  -profile-dir "$HOME/.itemize/amazon/amazon-erick" \
+  -account erick
 ```
 
 Then fetch orders:
 
 ```bash
 YEAR=$(date +%Y)
-go run ./examples/fetch_orders.go -year "$YEAR" -details -max 10
+go run ./examples/fetch_orders.go -account erick -year "$YEAR" -details -max 10
 ```
 
-With no `-account` or `-cookie-file`, the example command automatically tries every imported `cookies-arc-*.json` account it can authenticate. Expired or signed-out profiles are skipped.
-
-To fetch one imported profile explicitly:
-
-```bash
-YEAR=$(date +%Y)
-go run ./examples/fetch_orders.go -account arc-profile-1 -year "$YEAR" -details -max 10
-```
-
-To import one Arc profile with a custom account name:
-
-```bash
-go run ./cmd/amazon-go import-arc \
-  -profile "$HOME/Library/Application Support/Arc/User Data/Profile 1/Cookies" \
-  -account personal
-```
-
-## Browser Setup Fallback
-
-If Arc import is not available, `setup-session` opens a dedicated Chromium profile, waits while you log into Amazon if needed, and saves the cookies into `~/.amazon-go/cookies.json`.
-
-```bash
-go run ./cmd/amazon-go setup-session
-go run ./cmd/amazon-go check-auth
-```
-
-The dedicated browser profile lives at:
+The `-profile-dir` value should be a Chromium/Playwright user-data directory.
+For migration from `amazon-order-scraper`, use the same profile directory that
+worked there, for example:
 
 ```text
-~/.amazon-go/browser-profile
+~/.itemize/amazon/amazon-erick
+~/.itemize/amazon/amazon-wife
 ```
+
+If Playwright is not auto-detected, install it in the working directory or pass
+`-playwright-root` pointing at a directory that contains `node_modules/playwright`:
+
+```bash
+npm install playwright
+go run ./cmd/amazon-go import-browser-profile \
+  -profile-dir "$HOME/.itemize/amazon/amazon-erick" \
+  -account erick
+```
+
+For automation, add `-headless` after the profile has a valid session:
+
+```bash
+go run ./cmd/amazon-go import-browser-profile \
+  -headless \
+  -profile-dir "$HOME/.itemize/amazon/amazon-wife" \
+  -account amazon-wife
+```
+
+## Multiple Accounts
+
+Use separate account names for separate browser profiles:
+
+```bash
+go run ./cmd/amazon-go import-browser-profile \
+  -profile-dir "$HOME/.itemize/amazon/amazon-erick" \
+  -account erick
+
+go run ./cmd/amazon-go import-browser-profile \
+  -profile-dir "$HOME/.itemize/amazon/amazon-wife" \
+  -account amazon-wife
+```
+
+Then fetch one account explicitly:
+
+```bash
+go run ./examples/fetch_orders.go -account amazon-wife -year "$YEAR" -details -max 10
+```
+
+## Auth Check
+
+Verify saved cookies can access Amazon order history:
+
+```bash
+go run ./cmd/amazon-go check-auth -account erick
+```
+
+If this fails, re-open the browser profile, make sure it can load
+`https://www.amazon.com/gp/css/order-history?disableCsd=no-js`, and re-run
+`import-browser-profile`.
 
 ## Manual Cookie Import
 
@@ -113,7 +136,7 @@ import (
 )
 
 func main() {
-    client, err := amazon.NewClient(amazon.WithAccount("arc-profile-1"))
+    client, err := amazon.NewClient(amazon.WithAccount("personal"))
     if err != nil {
         panic(err)
     }
@@ -135,9 +158,7 @@ func main() {
 }
 ```
 
-## Multiple Accounts
-
-`amazon-go` supports multiple cookie jars through account names:
+`amazon-go` stores account-specific cookie jars in:
 
 ```go
 client, err := amazon.NewClient(amazon.WithAccount("personal"))
@@ -149,13 +170,22 @@ That stores cookies at:
 ~/.amazon-go/cookies-personal.json
 ```
 
-The Arc importer uses this mechanism automatically. It handles multiple browser profiles, not Amazon's in-page "Switch Accounts" menu. If one browser profile can switch between two Amazon identities, `amazon-go` fetches whichever identity is currently active for that cookie jar.
+Use one browser profile per Amazon account. Amazon's in-page "Switch Accounts"
+menu changes whichever identity is active for that one cookie jar; it does not
+create separate cookie accounts by itself.
 
-For reliable multi-account scraping, use one browser profile per Amazon account, then run:
+For reliable multi-account scraping, import each profile into its own account:
 
 ```bash
-go run ./cmd/amazon-go import-arc
-go run ./examples/fetch_orders.go -details
+go run ./cmd/amazon-go import-browser-profile \
+  -profile-dir "$HOME/.itemize/amazon/amazon-erick" \
+  -account erick
+
+go run ./cmd/amazon-go import-browser-profile \
+  -profile-dir "$HOME/.itemize/amazon/amazon-wife" \
+  -account wife
+
+go run ./examples/fetch_orders.go -account wife -details
 ```
 
 ## Transactions
@@ -179,7 +209,6 @@ Order summary and item-detail scraping are the primary verified path. Transactio
 
 - Amazon can change these HTML pages at any time.
 - Cookies expire and may need to be re-imported.
-- Arc cookie import is macOS and Arc specific.
 - The CLI does not automatically enumerate Amazon's "Switch Accounts" identities inside one browser session.
 - Keep exported cookie files private. They are bearer credentials for your Amazon session.
 

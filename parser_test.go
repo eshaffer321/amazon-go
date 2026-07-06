@@ -73,6 +73,19 @@ func TestParseLegacyOrderList(t *testing.T) {
 	}
 }
 
+func TestParseOrderListDetectsAmazonSignInTitle(t *testing.T) {
+	html := `<html><head><title>Amazon Sign-In</title></head><body></body></html>`
+
+	parser := NewParser()
+	_, err := parser.ParseOrderList(strings.NewReader(html))
+	if err == nil {
+		t.Fatal("Expected sign-in page error")
+	}
+	if !strings.Contains(err.Error(), "session expired") {
+		t.Fatalf("Expected session expired error, got: %v", err)
+	}
+}
+
 func TestParseLegacyOrderDetails(t *testing.T) {
 	html := `
 		<html><body>
@@ -99,6 +112,59 @@ func TestParseLegacyOrderDetails(t *testing.T) {
 	}
 	if len(order.Items) != 1 || order.Items[0].ASIN != "B09XV8WDY6" {
 		t.Fatalf("Expected legacy item to be parsed, got %#v", order.Items)
+	}
+}
+
+func TestParseOrderDetailsReadsImageOverlayQuantity(t *testing.T) {
+	html := `
+		<html><body>
+			<div>Order #112-1131457-5825001</div>
+			<div>Order placed July 4, 2026</div>
+			<div data-component="chargeSummary">
+				<div class="od-line-item-row">
+					<span class="od-line-item-row-label">Item(s) Subtotal:</span>
+					<span class="od-line-item-row-content">$79.98</span>
+				</div>
+				<div class="od-line-item-row">
+					<span class="od-line-item-row-label">Grand Total:</span>
+					<span class="od-line-item-row-content">$84.78</span>
+				</div>
+			</div>
+			<div data-component="shipments">
+				<div data-component="shipmentsLeftGrid">
+					<div data-component="itemImage">
+						<a href="/dp/B099RSXLGH"><img alt="Baby Sound Machine" /></a>
+						<div class="od-item-view-qty"><span>2</span></div>
+					</div>
+				</div>
+				<div data-component="purchasedItemsRightGrid">
+					<div data-component="itemTitle">
+						<a href="/dp/B099RSXLGH">Baby Sound Machine</a>
+					</div>
+					<div data-component="quantity"><span class="a-size-small"></span></div>
+					<div data-component="unitPrice"><span class="a-offscreen">$39.99</span></div>
+				</div>
+			</div>
+		</body></html>`
+
+	parser := NewParser()
+	order, err := parser.ParseOrderDetails(strings.NewReader(html))
+	if err != nil {
+		t.Fatalf("ParseOrderDetails failed: %v", err)
+	}
+
+	if len(order.Items) != 1 {
+		t.Fatalf("Expected 1 item, got %d", len(order.Items))
+	}
+	item := order.Items[0]
+	if item.Quantity != 2 {
+		t.Fatalf("Expected quantity 2, got %.0f", item.Quantity)
+	}
+	if item.UnitPrice != 39.99 {
+		t.Fatalf("Expected unit price 39.99, got %.2f", item.UnitPrice)
+	}
+	if item.Price != 79.98 {
+		t.Fatalf("Expected line total 79.98, got %.2f", item.Price)
 	}
 }
 
@@ -254,8 +320,8 @@ func TestParseQuantity(t *testing.T) {
 		{"x5", 5},
 		{"2x", 2},
 		{"1", 1},
-		{"", 1},
-		{"invalid", 1},
+		{"", 0},
+		{"invalid", 0},
 	}
 
 	for _, tc := range tests {

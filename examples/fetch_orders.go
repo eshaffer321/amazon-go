@@ -8,9 +8,6 @@ import (
 	"log"
 	"log/slog"
 	"os"
-	"path/filepath"
-	"sort"
-	"strings"
 	"time"
 
 	amazon "github.com/eshaffer321/amazon-go"
@@ -115,27 +112,15 @@ func main() {
 		return
 	}
 
-	if account == "" && cookieFile == "" {
-		accounts, err := discoverArcAccounts()
-		if err != nil {
-			log.Fatalf("Failed to discover Arc accounts: %v", err)
-		}
-		if len(accounts) > 0 {
-			fetchAllAccounts(accounts, opts, year, maxOrders, details)
-			return
-		}
-	}
-
 	// Check if we have cookies
 	if !client.CookieStore().HasEssentialCookies() {
 		fmt.Println("No cookies found. Please import cookies first:")
 		fmt.Println("")
-		fmt.Println("1. Log into Amazon in your browser")
-		fmt.Println("2. Navigate to https://www.amazon.com/gp/css/order-history?disableCsd=no-js")
-		fmt.Println("3. Open DevTools -> Network tab")
-		fmt.Println("4. Refresh the page")
-		fmt.Println("5. Right-click on the main request -> 'Copy as cURL'")
-		fmt.Println("6. Run: pbpaste | go run examples/fetch_orders.go -import-curl-file -")
+		fmt.Println("  go run ./cmd/amazon-go import-browser-profile -profile-dir <profile-dir> -account <name>")
+		fmt.Println("")
+		fmt.Println("Or import a copied browser request:")
+		fmt.Println("")
+		fmt.Println("  pbpaste | go run examples/fetch_orders.go -import-curl-file -")
 		os.Exit(1)
 	}
 
@@ -207,72 +192,6 @@ func displayOrders(orders []*amazon.Order) {
 		total += order.GetTotal()
 	}
 	fmt.Printf("Total spent: $%.2f across %d orders\n", total, len(orders))
-}
-
-func fetchAllAccounts(accounts []string, baseOpts []amazon.Option, year, maxOrders int, details bool) {
-	var totalOrders int
-	var totalSpent float64
-	fetched := 0
-
-	for _, account := range accounts {
-		opts := append([]amazon.Option{}, baseOpts...)
-		opts = append(opts, amazon.WithAccount(account))
-
-		client, err := amazon.NewClient(opts...)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Skipping account %q: %v\n", account, err)
-			continue
-		}
-		if !client.CookieStore().HasEssentialCookies() {
-			fmt.Fprintf(os.Stderr, "Skipping account %q: no essential Amazon cookies\n", account)
-			continue
-		}
-		if err := client.HealthCheck(); err != nil {
-			fmt.Fprintf(os.Stderr, "Skipping account %q: auth check failed: %v\n", account, err)
-			continue
-		}
-
-		fmt.Printf("\n=== Account: %s ===\n", account)
-		orders, err := fetchOrders(client, year, maxOrders, details)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Skipping account %q: fetch failed: %v\n", account, err)
-			continue
-		}
-		displayOrders(orders)
-
-		fetched++
-		totalOrders += len(orders)
-		for _, order := range orders {
-			totalSpent += order.GetTotal()
-		}
-	}
-
-	if fetched == 0 {
-		log.Fatal("No Arc accounts could be fetched. Run: go run ./cmd/amazon-go import-arc")
-	}
-	fmt.Printf("\nFetched %d Arc accounts. Combined total spent: $%.2f across %d orders\n", fetched, totalSpent, totalOrders)
-}
-
-func discoverArcAccounts() ([]string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
-	}
-	matches, err := filepath.Glob(filepath.Join(home, ".amazon-go", "cookies-arc-*.json"))
-	if err != nil {
-		return nil, err
-	}
-	sort.Strings(matches)
-
-	accounts := make([]string, 0, len(matches))
-	for _, path := range matches {
-		name := filepath.Base(path)
-		account := strings.TrimSuffix(strings.TrimPrefix(name, "cookies-"), ".json")
-		if account != "" {
-			accounts = append(accounts, account)
-		}
-	}
-	return accounts, nil
 }
 
 func readInput(path string) (string, error) {
