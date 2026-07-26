@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-25
+
+### Added
+- Added `BrowserFingerprint`, `WithBrowserFingerprint`, and cookie-store fingerprint persistence so clients can reuse the user agent and User-Agent Client Hints from the browser session that authenticated the cookies.
+- Added complete cookie snapshot replacement and URL-scoped cookie selection APIs.
+
+### Changed
+- Browser-profile import now captures and persists the browser fingerprint, replaces the previous cookie snapshot, retains cookies refreshed by successful validation, and leaves the saved file untouched when validation fails.
+- HTTP requests now honor cookie expiration, secure, domain, and path attributes instead of sending every stored cookie to every Amazon URL.
+
+### Fixed
+- Prevented Amazon sessions from appearing expired when a current browser cookie set was sent with the library's stale Chrome 120 fingerprint.
+- Prevented deleted and expired anti-bot cookies from surviving later browser imports or being sent in health-check and order requests.
+- Normalized browser-exported cookie values that retain surrounding quotes before constructing HTTP Cookie headers.
+
 ## [0.3.0] - 2026-07-06
 
 ### Changed

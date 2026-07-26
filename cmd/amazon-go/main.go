@@ -82,7 +82,7 @@ func importBrowserProfile(args []string) {
 		log.Fatalf("Failed to find Playwright: %v", err)
 	}
 
-	cookies, title, err := exportCookiesWithPlaywright(root, resolvedProfileDir, *headless)
+	cookies, title, fingerprint, err := exportCookiesWithPlaywright(root, resolvedProfileDir, *headless)
 	if err != nil {
 		log.Fatalf("Failed to export cookies from browser profile: %v", err)
 	}
@@ -90,13 +90,12 @@ func importBrowserProfile(args []string) {
 		log.Fatal("No Amazon cookies were available in the browser profile")
 	}
 
-	client, err := newClient(*cookieFile, *account)
+	client, err := newClient(*cookieFile, *account, fingerprint)
 	if err != nil {
 		log.Fatalf("Failed to create Amazon client: %v", err)
 	}
-	for _, c := range cookies {
-		client.CookieStore().Set(c)
-	}
+	client.CookieStore().Replace(cookies)
+	client.CookieStore().SetBrowserFingerprint(fingerprint)
 	if !*skipAuthCheck {
 		if err := client.HealthCheck(); err != nil {
 			log.Fatalf("Exported %d cookies from %q, but auth check failed: %v", len(cookies), resolvedProfileDir, err)
@@ -129,12 +128,16 @@ func checkAuth(args []string) {
 	if err := client.HealthCheck(); err != nil {
 		log.Fatalf("Auth check failed: %v", err)
 	}
+	if err := client.SaveCookies(); err != nil {
+		log.Fatalf("Failed to save refreshed cookies: %v", err)
+	}
 	fmt.Println("Auth check passed.")
 }
 
 type exportedCookies struct {
-	Title   string          `json:"title"`
-	Cookies []browserCookie `json:"cookies"`
+	Title              string                    `json:"title"`
+	BrowserFingerprint amazon.BrowserFingerprint `json:"browserFingerprint"`
+	Cookies            []browserCookie           `json:"cookies"`
 }
 
 type browserCookie struct {
@@ -147,10 +150,10 @@ type browserCookie struct {
 	HttpOnly bool    `json:"httpOnly"`
 }
 
-func exportCookiesWithPlaywright(playwrightRoot, profileDir string, headless bool) ([]*amazon.Cookie, string, error) {
+func exportCookiesWithPlaywright(playwrightRoot, profileDir string, headless bool) ([]*amazon.Cookie, string, amazon.BrowserFingerprint, error) {
 	scriptPath, err := writePlaywrightExportScript(playwrightRoot)
 	if err != nil {
-		return nil, "", err
+		return nil, "", amazon.BrowserFingerprint{}, err
 	}
 	defer os.Remove(scriptPath)
 
@@ -159,14 +162,14 @@ func exportCookiesWithPlaywright(playwrightRoot, profileDir string, headless boo
 	out, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			return nil, "", fmt.Errorf("node/playwright failed: %s", strings.TrimSpace(string(exitErr.Stderr)))
+			return nil, "", amazon.BrowserFingerprint{}, fmt.Errorf("node/playwright failed: %s", strings.TrimSpace(string(exitErr.Stderr)))
 		}
-		return nil, "", err
+		return nil, "", amazon.BrowserFingerprint{}, err
 	}
 
 	var exported exportedCookies
 	if err := json.Unmarshal(out, &exported); err != nil {
-		return nil, "", fmt.Errorf("failed to parse Playwright cookie export: %w", err)
+		return nil, "", amazon.BrowserFingerprint{}, fmt.Errorf("failed to parse Playwright cookie export: %w", err)
 	}
 
 	cookies := make([]*amazon.Cookie, 0, len(exported.Cookies))
@@ -185,7 +188,7 @@ func exportCookiesWithPlaywright(playwrightRoot, profileDir string, headless boo
 		})
 	}
 
-	return cookies, exported.Title, nil
+	return cookies, exported.Title, exported.BrowserFingerprint, nil
 }
 
 func writePlaywrightExportScript(playwrightRoot string) (string, error) {
@@ -200,12 +203,21 @@ async function main() {
     viewport: { width: 1280, height: 800 },
     locale: "en-US"
   };
+  let requestedFingerprint = null;
   if (headless) {
     const version = await chromiumVersion();
+    const majorVersion = version.split(".")[0];
     options.userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + version + " Safari/537.36";
     options.extraHTTPHeaders = {
-      "sec-ch-ua": "\"Chromium\";v=\"" + version.split(".")[0] + "\", \"Not A(Brand\";v=\"24\"",
+      "sec-ch-ua": "\"Chromium\";v=\"" + majorVersion + "\", \"Not A(Brand\";v=\"24\"",
+      "sec-ch-ua-mobile": "?0",
       "sec-ch-ua-platform": "\"macOS\""
+    };
+    requestedFingerprint = {
+      user_agent: options.userAgent,
+      sec_ch_ua: options.extraHTTPHeaders["sec-ch-ua"],
+      sec_ch_ua_mobile: options.extraHTTPHeaders["sec-ch-ua-mobile"],
+      sec_ch_ua_platform: options.extraHTTPHeaders["sec-ch-ua-platform"]
     };
   }
   const context = await chromium.launchPersistentContext(profileDir, options);
@@ -232,7 +244,23 @@ async function main() {
     }
     const cookies = await context.cookies(["https://www.amazon.com", ordersURL]);
     const amazonCookies = cookies.filter(c => ["amazon.com", ".amazon.com", "www.amazon.com", ".www.amazon.com"].includes(c.domain));
-    console.log(JSON.stringify({ title: await page.title(), cookies: amazonCookies }));
+    const detectedFingerprint = await page.evaluate(() => {
+      const data = navigator.userAgentData;
+      const secCHUA = data && data.brands
+        ? data.brands.map(entry => JSON.stringify(entry.brand) + ";v=" + JSON.stringify(entry.version)).join(", ")
+        : "";
+      return {
+        user_agent: navigator.userAgent,
+        sec_ch_ua: secCHUA,
+        sec_ch_ua_mobile: data ? (data.mobile ? "?1" : "?0") : "",
+        sec_ch_ua_platform: data ? JSON.stringify(data.platform) : ""
+      };
+    });
+    console.log(JSON.stringify({
+      title: await page.title(),
+      browserFingerprint: requestedFingerprint || detectedFingerprint,
+      cookies: amazonCookies
+    }));
   } finally {
     await context.close();
   }
@@ -334,13 +362,16 @@ func fileExists(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
-func newClient(cookieFile, account string) (*amazon.Client, error) {
-	var opts []amazon.Option
+func newClient(cookieFile, account string, fingerprints ...amazon.BrowserFingerprint) (*amazon.Client, error) {
+	opts := []amazon.Option{amazon.WithAutoSave(false)}
 	if cookieFile != "" {
 		opts = append(opts, amazon.WithCookieFile(cookieFile))
 	}
 	if account != "" {
 		opts = append(opts, amazon.WithAccount(account))
+	}
+	if len(fingerprints) > 0 {
+		opts = append(opts, amazon.WithBrowserFingerprint(fingerprints[0]))
 	}
 	return amazon.NewClient(opts...)
 }

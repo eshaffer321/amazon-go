@@ -22,9 +22,11 @@ go get github.com/eshaffer321/amazon-go
 The most reliable setup is exporting cookies through a browser profile that is
 already logged into Amazon. This uses Playwright only in the helper CLI; the
 library itself still fetches orders with normal HTTP requests after cookies are
-saved. The exporter opens Chromium visibly by default so Amazon can renew a
-session if needed. Headless export is supported for already-valid profiles, but
-it cannot complete Amazon sign-in, passkey, or MFA challenges.
+saved. The importer persists both the browser cookie snapshot and the browser's
+user agent/client-hint fingerprint so later HTTP requests retain the identity
+Amazon authenticated. The exporter opens Chromium visibly by default so Amazon
+can renew a session if needed. Headless export is supported for already-valid
+profiles, but it cannot complete Amazon sign-in, passkey, or MFA challenges.
 
 ```bash
 go run ./cmd/amazon-go import-browser-profile \
@@ -156,6 +158,26 @@ func main() {
         }
     }
 }
+```
+
+Browser-profile import persists the matching fingerprint automatically. For a
+custom importer, associate the captured identity with the cookie snapshot:
+
+```go
+fingerprint := amazon.BrowserFingerprint{
+    UserAgent:       browserUserAgent,
+    SecCHUA:         browserSecCHUA,
+    SecCHUAMobile:   "?0",
+    SecCHUAPlatform: `"macOS"`,
+}
+
+client, err := amazon.NewClient(
+    amazon.WithAccount("personal"),
+    amazon.WithBrowserFingerprint(fingerprint),
+)
+client.CookieStore().Replace(browserCookies)
+client.CookieStore().SetBrowserFingerprint(fingerprint)
+err = client.SaveCookies()
 ```
 
 `amazon-go` stores account-specific cookie jars in:

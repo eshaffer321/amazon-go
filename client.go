@@ -22,13 +22,16 @@ const (
 
 // ClientConfig holds configuration options for the Amazon client
 type ClientConfig struct {
-	CookieFile  string
-	AccountName string // For multi-account support (e.g., "personal", "work")
-	RateLimit   time.Duration
-	MaxRetries  int
-	AutoSave    bool
-	Logger      *slog.Logger
-	UserAgent   string
+	CookieFile          string
+	AccountName         string // For multi-account support (e.g., "personal", "work")
+	RateLimit           time.Duration
+	MaxRetries          int
+	AutoSave            bool
+	Logger              *slog.Logger
+	UserAgent           string
+	BrowserFingerprint  *BrowserFingerprint
+	userAgentExplicit   bool
+	fingerprintExplicit bool
 }
 
 // Client represents an Amazon client for fetching order data
@@ -40,6 +43,7 @@ type Client struct {
 	autoSave    bool
 	logger      *slog.Logger
 	userAgent   string
+	fingerprint *BrowserFingerprint
 	lastRequest time.Time
 	mu          sync.RWMutex
 }
@@ -86,6 +90,20 @@ func WithLogger(logger *slog.Logger) Option {
 func WithUserAgent(ua string) Option {
 	return func(c *ClientConfig) {
 		c.UserAgent = ua
+		c.userAgentExplicit = true
+	}
+}
+
+// WithBrowserFingerprint sets the browser user agent and user-agent client
+// hints associated with an authenticated cookie snapshot.
+func WithBrowserFingerprint(fingerprint BrowserFingerprint) Option {
+	return func(c *ClientConfig) {
+		c.BrowserFingerprint = cloneBrowserFingerprint(&fingerprint)
+		c.fingerprintExplicit = true
+		if fingerprint.UserAgent != "" {
+			c.UserAgent = fingerprint.UserAgent
+			c.userAgentExplicit = true
+		}
 	}
 }
 
@@ -132,6 +150,14 @@ func NewClient(opts ...Option) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cookie store: %w", err)
 	}
+	if !config.fingerprintExplicit {
+		config.BrowserFingerprint = cookieStore.BrowserFingerprint()
+		if config.BrowserFingerprint != nil &&
+			config.BrowserFingerprint.UserAgent != "" &&
+			!config.userAgentExplicit {
+			config.UserAgent = config.BrowserFingerprint.UserAgent
+		}
+	}
 
 	// Create logger if not provided
 	logger := config.Logger
@@ -156,6 +182,7 @@ func NewClient(opts ...Option) (*Client, error) {
 		autoSave:    config.AutoSave,
 		logger:      logger.With("client", "amazon"),
 		userAgent:   config.UserAgent,
+		fingerprint: cloneBrowserFingerprint(config.BrowserFingerprint),
 	}, nil
 }
 
@@ -244,23 +271,23 @@ func (c *Client) setHeaders(req *http.Request) {
 		"user-agent":      c.userAgent,
 		"dnt":             "1",
 	}
+	if c.fingerprint != nil {
+		headers["sec-ch-ua"] = c.fingerprint.SecCHUA
+		headers["sec-ch-ua-mobile"] = c.fingerprint.SecCHUAMobile
+		headers["sec-ch-ua-platform"] = c.fingerprint.SecCHUAPlatform
+	}
 
 	for k, v := range headers {
-		req.Header.Set(k, v)
+		if v != "" {
+			req.Header.Set(k, v)
+		}
 	}
 }
 
 // setCookies sets cookies on the request from the cookie store
 func (c *Client) setCookies(req *http.Request) {
-	allCookies := c.cookieStore.GetAll()
-	var cookiePairs []string
-
-	for name, cookie := range allCookies {
-		cookiePairs = append(cookiePairs, fmt.Sprintf("%s=%s", name, cookie.Value))
-	}
-
-	if len(cookiePairs) > 0 {
-		req.Header.Set("Cookie", strings.Join(cookiePairs, "; "))
+	for _, cookie := range c.cookieStore.CookiesForURL(req.URL) {
+		req.AddCookie(cookie)
 	}
 }
 

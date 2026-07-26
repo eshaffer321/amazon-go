@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,17 +31,28 @@ type Cookie struct {
 	HttpOnly bool   `json:"httpOnly,omitempty"`
 }
 
+// BrowserFingerprint contains the browser identity headers associated with an
+// authenticated cookie snapshot.
+type BrowserFingerprint struct {
+	UserAgent       string `json:"user_agent,omitempty"`
+	SecCHUA         string `json:"sec_ch_ua,omitempty"`
+	SecCHUAMobile   string `json:"sec_ch_ua_mobile,omitempty"`
+	SecCHUAPlatform string `json:"sec_ch_ua_platform,omitempty"`
+}
+
 // CookieStore manages cookie persistence and retrieval
 type CookieStore struct {
-	cookies  map[string]*Cookie
-	filePath string
-	mu       sync.RWMutex
+	cookies            map[string]*Cookie
+	browserFingerprint *BrowserFingerprint
+	filePath           string
+	mu                 sync.RWMutex
 }
 
 // CookieFile represents the JSON structure for cookie storage
 type CookieFile struct {
-	Cookies   []*Cookie `json:"cookies"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Cookies            []*Cookie           `json:"cookies"`
+	BrowserFingerprint *BrowserFingerprint `json:"browser_fingerprint,omitempty"`
+	UpdatedAt          time.Time           `json:"updated_at"`
 }
 
 // NewCookieStore creates a new cookie store with the given file path
@@ -93,8 +107,12 @@ func (s *CookieStore) Load() error {
 
 	s.cookies = make(map[string]*Cookie)
 	for _, c := range cookieFile.Cookies {
-		s.cookies[c.Name] = c
+		if c == nil || cookieExpired(c, time.Now()) {
+			continue
+		}
+		s.cookies[cookieKey(c)] = c
 	}
+	s.browserFingerprint = cloneBrowserFingerprint(cookieFile.BrowserFingerprint)
 
 	return nil
 }
@@ -106,12 +124,17 @@ func (s *CookieStore) Save() error {
 
 	cookies := make([]*Cookie, 0, len(s.cookies))
 	for _, c := range s.cookies {
+		if c == nil || cookieExpired(c, time.Now()) {
+			continue
+		}
 		cookies = append(cookies, c)
 	}
+	sortCookies(cookies)
 
 	cookieFile := CookieFile{
-		Cookies:   cookies,
-		UpdatedAt: time.Now(),
+		Cookies:            cookies,
+		BrowserFingerprint: cloneBrowserFingerprint(s.browserFingerprint),
+		UpdatedAt:          time.Now(),
 	}
 
 	data, err := json.MarshalIndent(cookieFile, "", "  ")
@@ -135,14 +158,58 @@ func (s *CookieStore) Save() error {
 func (s *CookieStore) Get(name string) *Cookie {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.cookies[name]
+	for _, cookie := range s.cookies {
+		if cookie != nil && cookie.Name == name && !cookieExpired(cookie, time.Now()) {
+			return cookie
+		}
+	}
+	return nil
 }
 
 // Set adds or updates a cookie
 func (s *CookieStore) Set(cookie *Cookie) {
+	if cookie == nil {
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.cookies[cookie.Name] = cookie
+	key := cookieKey(cookie)
+	if cookieExpired(cookie, time.Now()) {
+		delete(s.cookies, key)
+		return
+	}
+	s.cookies[key] = cookie
+}
+
+// Replace replaces the complete cookie snapshot while retaining the currently
+// configured browser fingerprint.
+func (s *CookieStore) Replace(cookies []*Cookie) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.cookies = make(map[string]*Cookie, len(cookies))
+	now := time.Now()
+	for _, cookie := range cookies {
+		if cookie == nil || cookieExpired(cookie, now) {
+			continue
+		}
+		s.cookies[cookieKey(cookie)] = cookie
+	}
+}
+
+// SetBrowserFingerprint associates browser identity headers with this cookie
+// snapshot. The fingerprint is persisted by Save.
+func (s *CookieStore) SetBrowserFingerprint(fingerprint BrowserFingerprint) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.browserFingerprint = cloneBrowserFingerprint(&fingerprint)
+}
+
+// BrowserFingerprint returns a copy of the saved browser identity, if present.
+func (s *CookieStore) BrowserFingerprint() *BrowserFingerprint {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return cloneBrowserFingerprint(s.browserFingerprint)
 }
 
 // GetAll returns all cookies
@@ -151,8 +218,13 @@ func (s *CookieStore) GetAll() map[string]*Cookie {
 	defer s.mu.RUnlock()
 
 	result := make(map[string]*Cookie, len(s.cookies))
-	for k, v := range s.cookies {
-		result[k] = v
+	for _, cookie := range s.cookies {
+		if cookie == nil || cookieExpired(cookie, time.Now()) {
+			continue
+		}
+		if _, exists := result[cookie.Name]; !exists {
+			result[cookie.Name] = cookie
+		}
 	}
 	return result
 }
@@ -170,36 +242,164 @@ func (s *CookieStore) ToHTTPCookies() []*http.Cookie {
 	defer s.mu.RUnlock()
 
 	cookies := make([]*http.Cookie, 0, len(s.cookies))
+	now := time.Now()
 	for _, c := range s.cookies {
-		httpCookie := &http.Cookie{
-			Name:     c.Name,
-			Value:    c.Value,
-			Domain:   c.Domain,
-			Path:     c.Path,
-			Secure:   c.Secure,
-			HttpOnly: c.HttpOnly,
+		if c == nil || cookieExpired(c, now) {
+			continue
 		}
-		if c.Expires > 0 {
-			httpCookie.Expires = time.Unix(c.Expires, 0)
-		}
-		cookies = append(cookies, httpCookie)
+		cookies = append(cookies, toHTTPCookie(c))
 	}
+	return cookies
+}
+
+// CookiesForURL returns unexpired cookies whose domain, path, and secure
+// attributes allow them to be sent to the URL.
+func (s *CookieStore) CookiesForURL(target *url.URL) []*http.Cookie {
+	if target == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	host := strings.ToLower(target.Hostname())
+	requestPath := target.EscapedPath()
+	if requestPath == "" {
+		requestPath = "/"
+	}
+	secure := strings.EqualFold(target.Scheme, "https")
+	now := time.Now()
+	cookies := make([]*http.Cookie, 0, len(s.cookies))
+	for _, cookie := range s.cookies {
+		if cookie == nil || cookieExpired(cookie, now) ||
+			(cookie.Secure && !secure) ||
+			!cookieDomainMatches(host, cookie.Domain) ||
+			!cookiePathMatches(requestPath, cookie.Path) {
+			continue
+		}
+		cookies = append(cookies, toHTTPCookie(cookie))
+	}
+	sort.Slice(cookies, func(i, j int) bool {
+		if len(cookies[i].Path) != len(cookies[j].Path) {
+			return len(cookies[i].Path) > len(cookies[j].Path)
+		}
+		return cookies[i].Name < cookies[j].Name
+	})
 	return cookies
 }
 
 // UpdateFromResponse updates cookies from HTTP response headers
 func (s *CookieStore) UpdateFromResponse(resp *http.Response) {
+	if resp == nil {
+		return
+	}
+	var requestURL *url.URL
+	if resp.Request != nil {
+		requestURL = resp.Request.URL
+	}
 	for _, cookie := range resp.Cookies() {
+		domain := cookie.Domain
+		path := cookie.Path
+		if requestURL != nil {
+			if domain == "" {
+				domain = requestURL.Hostname()
+			}
+			if path == "" {
+				path = defaultCookiePath(requestURL.Path)
+			}
+		}
+		expires := int64(0)
+		if !cookie.Expires.IsZero() {
+			expires = cookie.Expires.Unix()
+		}
 		s.Set(&Cookie{
 			Name:     cookie.Name,
 			Value:    cookie.Value,
-			Domain:   cookie.Domain,
-			Path:     cookie.Path,
-			Expires:  cookie.Expires.Unix(),
+			Domain:   domain,
+			Path:     path,
+			Expires:  expires,
 			Secure:   cookie.Secure,
 			HttpOnly: cookie.HttpOnly,
 		})
 	}
+}
+
+func cookieKey(cookie *Cookie) string {
+	return cookie.Name + "\x00" + strings.ToLower(cookie.Domain) + "\x00" + cookie.Path
+}
+
+func cookieExpired(cookie *Cookie, now time.Time) bool {
+	return cookie.Expires > 0 && cookie.Expires <= now.Unix()
+}
+
+func toHTTPCookie(cookie *Cookie) *http.Cookie {
+	value := cookie.Value
+	if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
+		if unquoted, err := strconv.Unquote(value); err == nil {
+			value = unquoted
+		}
+	}
+	result := &http.Cookie{
+		Name:     cookie.Name,
+		Value:    value,
+		Domain:   cookie.Domain,
+		Path:     cookie.Path,
+		Secure:   cookie.Secure,
+		HttpOnly: cookie.HttpOnly,
+	}
+	if cookie.Expires > 0 {
+		result.Expires = time.Unix(cookie.Expires, 0)
+	}
+	return result
+}
+
+func cookieDomainMatches(host, domain string) bool {
+	domain = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(domain)), ".")
+	return domain == "" || host == domain || strings.HasSuffix(host, "."+domain)
+}
+
+func cookiePathMatches(requestPath, cookiePath string) bool {
+	if cookiePath == "" {
+		cookiePath = "/"
+	}
+	if requestPath == cookiePath {
+		return true
+	}
+	if !strings.HasPrefix(requestPath, cookiePath) {
+		return false
+	}
+	return strings.HasSuffix(cookiePath, "/") ||
+		(len(requestPath) > len(cookiePath) && requestPath[len(cookiePath)] == '/')
+}
+
+func defaultCookiePath(requestPath string) string {
+	if requestPath == "" || requestPath[0] != '/' {
+		return "/"
+	}
+	lastSlash := strings.LastIndex(requestPath, "/")
+	if lastSlash <= 0 {
+		return "/"
+	}
+	return requestPath[:lastSlash]
+}
+
+func cloneBrowserFingerprint(fingerprint *BrowserFingerprint) *BrowserFingerprint {
+	if fingerprint == nil {
+		return nil
+	}
+	copy := *fingerprint
+	return &copy
+}
+
+func sortCookies(cookies []*Cookie) {
+	sort.Slice(cookies, func(i, j int) bool {
+		if cookies[i].Name != cookies[j].Name {
+			return cookies[i].Name < cookies[j].Name
+		}
+		if cookies[i].Domain != cookies[j].Domain {
+			return cookies[i].Domain < cookies[j].Domain
+		}
+		return cookies[i].Path < cookies[j].Path
+	})
 }
 
 // ExtractFromCurl parses cookies from a curl command string

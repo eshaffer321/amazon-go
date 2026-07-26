@@ -1,9 +1,11 @@
 package amazon
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestExtractFromCurl(t *testing.T) {
@@ -134,6 +136,73 @@ func TestCookieStore_ToHTTPCookies(t *testing.T) {
 	httpCookies := store.ToHTTPCookies()
 	if len(httpCookies) != 2 {
 		t.Errorf("Expected 2 HTTP cookies, got %d", len(httpCookies))
+	}
+}
+
+func TestCookieStore_ToHTTPCookiesUnquotesBrowserCookieValues(t *testing.T) {
+	cookieFile := filepath.Join(t.TempDir(), "cookies.json")
+	store, err := NewCookieStore(cookieFile)
+	if err != nil {
+		t.Fatalf("NewCookieStore failed: %v", err)
+	}
+	store.Set(&Cookie{Name: "x-main", Value: `"quoted-browser-value"`, Domain: ".amazon.com", Path: "/"})
+
+	cookies := store.ToHTTPCookies()
+	if len(cookies) != 1 {
+		t.Fatalf("expected one cookie, got %d", len(cookies))
+	}
+	if cookies[0].Value != "quoted-browser-value" {
+		t.Fatalf("cookie value = %q, want unquoted browser value", cookies[0].Value)
+	}
+}
+
+func TestCookieStoreReplacePersistsFingerprintAndDropsExpiredCookies(t *testing.T) {
+	cookieFile := filepath.Join(t.TempDir(), "cookies.json")
+	store, err := NewCookieStore(cookieFile)
+	if err != nil {
+		t.Fatalf("NewCookieStore failed: %v", err)
+	}
+	store.Set(&Cookie{Name: "stale", Value: "old", Domain: ".amazon.com", Path: "/"})
+
+	fingerprint := BrowserFingerprint{
+		UserAgent:       "Mozilla/5.0 Chrome/143.0.7499.4 Safari/537.36",
+		SecCHUA:         `"Chromium";v="143", "Not A(Brand";v="24"`,
+		SecCHUAMobile:   "?0",
+		SecCHUAPlatform: `"macOS"`,
+	}
+	store.Replace([]*Cookie{
+		{Name: "session-id", Value: "active", Domain: ".amazon.com", Path: "/"},
+		{Name: "ak_bmsc", Value: "expired", Domain: ".amazon.com", Path: "/", Expires: time.Now().Add(-time.Hour).Unix()},
+	})
+	store.SetBrowserFingerprint(fingerprint)
+	if err := store.Save(); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	data, err := os.ReadFile(cookieFile)
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+	var saved CookieFile
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+	if len(saved.Cookies) != 1 || saved.Cookies[0].Name != "session-id" {
+		t.Fatalf("expected only the active replacement cookie, got %#v", saved.Cookies)
+	}
+	if saved.BrowserFingerprint == nil || saved.BrowserFingerprint.UserAgent != fingerprint.UserAgent {
+		t.Fatalf("fingerprint was not persisted: %#v", saved.BrowserFingerprint)
+	}
+
+	loaded, err := NewCookieStore(cookieFile)
+	if err != nil {
+		t.Fatalf("NewCookieStore reload failed: %v", err)
+	}
+	if loaded.Get("stale") != nil || loaded.Get("ak_bmsc") != nil {
+		t.Fatal("stale or expired cookies survived replacement")
+	}
+	if got := loaded.BrowserFingerprint(); got == nil || got.SecCHUA != fingerprint.SecCHUA {
+		t.Fatalf("fingerprint was not loaded: %#v", got)
 	}
 }
 
