@@ -135,12 +135,13 @@ type OrderSummary struct {
 type Transaction struct {
 	OrderID       string    // The associated order ID (e.g., "114-9733092-9360267")
 	Date          time.Time // Date the charge was made
-	Amount        float64   // Amount charged (positive value)
+	Amount        float64   // Amount charged or refunded (always a positive value; see IsRefund)
 	PaymentMethod string    // Payment method description (e.g., "Prime Visa ****1211")
 	CardType      string    // Card type extracted (e.g., "Visa", "Mastercard", "Amex")
 	LastFour      string    // Last 4 digits of card (e.g., "1211")
 	Merchant      string    // Merchant name (e.g., "AMZN Mktp US")
-	Status        string    // Transaction status (e.g., "Completed", "Pending", "Refunded")
+	Status        string    // Section the transaction is listed under (e.g., "Completed", "In Progress")
+	IsRefund      bool      // True when the amount was credited back to the payment method
 }
 
 // GetOrderID returns the associated order ID

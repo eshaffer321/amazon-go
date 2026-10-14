@@ -264,5 +264,6 @@ type Transaction struct {
     LastFour      string
     Merchant      string
     Status        string
+    IsRefund      bool // credit back to the payment method; Amount stays positive
 }
 ```
