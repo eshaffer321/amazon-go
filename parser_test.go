@@ -517,3 +517,137 @@ func TestParseMultipleTransactions(t *testing.T) {
 		t.Errorf("Expected total %.2f, got %.2f", expectedTotal, total)
 	}
 }
+
+// transactionsWithRefundHTML mirrors Amazon's "Your Transactions" markup for an
+// order paid with a card plus rewards points and later refunded to both.
+// Line items live in a wrapper that is a sibling of their date container.
+const transactionsWithRefundHTML = `<html><body>
+<div class="a-box-group a-spacing-base">
+  <div class="a-box a-spacing-none a-box-title apx-transactions-sleeve-header-container">
+    <div class="a-box-inner a-padding-base"><span class="a-size-base a-text-bold">Completed</span></div>
+  </div>
+  <div class="a-box a-spacing-base"><div class="a-box-inner a-padding-none">
+    <div data-pmts-component-id="pp-1" class="a-section apx-transaction-date-container"><span>October 3, 2026</span></div>
+    <div data-pmts-component-id="pp-1" class="a-section a-spacing-base">
+      <div class="a-section a-spacing-base apx-transactions-line-item-component-container">
+        <div data-pmts-component-id="pp-2" class="a-row">
+          <div class="a-column a-span9"><span class="a-size-base a-text-bold">Prime Visa ****4242</span></div>
+          <div class="a-column a-span3 a-text-right a-span-last"><span class="a-size-base-plus a-color-success a-text-bold">+$31.24</span></div>
+        </div>
+        <div data-pmts-component-id="pp-2" class="a-section"><div class="a-row"><div class="a-column a-span12">
+          <a class="a-link-normal" href="/gp/css/summary/edit.html?orderID=111-1111111-1111111">Refund: Order #111-1111111-1111111</a>
+        </div></div></div>
+        <div data-pmts-component-id="pp-2" class="a-section"><div class="a-row"><div class="a-column a-span12"><span class="a-size-base">AMZN Mktp US</span></div></div></div>
+      </div>
+      <div class="a-section a-spacing-none"><hr class="a-spacing-base a-divider-normal"/></div>
+      <div class="a-section a-spacing-base apx-transactions-line-item-component-container">
+        <div data-pmts-component-id="pp-3" class="a-row">
+          <div class="a-column a-span9"><span class="a-size-base a-text-bold">Amazon Visa points</span></div>
+          <div class="a-column a-span3 a-text-right a-span-last"><span class="a-size-base-plus a-color-success a-text-bold">+$11.15</span></div>
+        </div>
+        <div data-pmts-component-id="pp-3" class="a-section"><div class="a-row"><div class="a-column a-span12">
+          <a class="a-link-normal" href="/gp/css/summary/edit.html?orderID=111-1111111-1111111">Refund: Order #111-1111111-1111111</a>
+        </div></div></div>
+        <div data-pmts-component-id="pp-3" class="a-section"><div class="a-row"><div class="a-column a-span12"><span class="a-size-base">AMZN Mktp US</span></div></div></div>
+      </div>
+    </div>
+    <div data-pmts-component-id="pp-4" class="a-section apx-transaction-date-container"><span>September 28, 2026</span></div>
+    <div data-pmts-component-id="pp-4" class="a-section a-spacing-base">
+      <div class="a-section a-spacing-base apx-transactions-line-item-component-container">
+        <div data-pmts-component-id="pp-5" class="a-row">
+          <div class="a-column a-span9"><span class="a-size-base a-text-bold">Prime Visa ****4242</span></div>
+          <div class="a-column a-span3 a-text-right a-span-last"><span class="a-size-base-plus a-text-bold">-$31.24</span></div>
+        </div>
+        <div data-pmts-component-id="pp-5" class="a-section"><div class="a-row"><div class="a-column a-span12">
+          <a class="a-link-normal" href="/gp/css/summary/edit.html?orderID=111-1111111-1111111">Order #111-1111111-1111111</a>
+        </div></div></div>
+        <div data-pmts-component-id="pp-5" class="a-section"><div class="a-row"><div class="a-column a-span12"><span class="a-size-base">AMZN Mktp US</span></div></div></div>
+      </div>
+    </div>
+    <div data-pmts-component-id="pp-6" class="a-section apx-transaction-date-container"><span>September 27, 2026</span></div>
+    <div data-pmts-component-id="pp-6" class="a-section a-spacing-base">
+      <div class="a-section a-spacing-base apx-transactions-line-item-component-container">
+        <div data-pmts-component-id="pp-7" class="a-row">
+          <div class="a-column a-span9"><span class="a-size-base a-text-bold">Amazon Visa points</span></div>
+          <div class="a-column a-span3 a-text-right a-span-last"><span class="a-size-base-plus a-text-bold">-$11.15</span></div>
+        </div>
+        <div data-pmts-component-id="pp-7" class="a-section"><div class="a-row"><div class="a-column a-span12">
+          <a class="a-link-normal" href="/gp/css/summary/edit.html?orderID=111-1111111-1111111">Order #111-1111111-1111111</a>
+        </div></div></div>
+        <div data-pmts-component-id="pp-7" class="a-section"><div class="a-row"><div class="a-column a-span12"><span class="a-size-base">AMZN Mktp US</span></div></div></div>
+      </div>
+    </div>
+  </div></div>
+</div>
+<div class="a-box-group a-spacing-base">
+  <div class="a-box a-spacing-none a-box-title apx-transactions-sleeve-header-container">
+    <div class="a-box-inner a-padding-base"><span class="a-size-base a-text-bold">In Progress</span></div>
+  </div>
+  <div class="a-box a-spacing-base"><div class="a-box-inner a-padding-none">
+    <div data-pmts-component-id="pp-8" class="a-section apx-transaction-date-container"><span>October 5, 2026</span></div>
+    <div data-pmts-component-id="pp-8" class="a-section a-spacing-base">
+      <div class="a-section a-spacing-base apx-transactions-line-item-component-container">
+        <div data-pmts-component-id="pp-9" class="a-row">
+          <div class="a-column a-span9"><span class="a-size-base a-text-bold">Prime Visa ****4242</span></div>
+          <div class="a-column a-span3 a-text-right a-span-last"><span class="a-size-base-plus a-text-bold">-$8.00</span></div>
+        </div>
+        <div data-pmts-component-id="pp-9" class="a-section"><div class="a-row"><div class="a-column a-span12">
+          <a class="a-link-normal" href="/gp/css/summary/edit.html?orderID=111-1111111-1111111">Order #111-1111111-1111111</a>
+        </div></div></div>
+      </div>
+    </div>
+  </div></div>
+</div>
+</body></html>`
+
+func TestParseTransactionsDistinguishesRefundsAndDatesEachRow(t *testing.T) {
+	transactions, err := NewParser().ParseTransactions(strings.NewReader(transactionsWithRefundHTML))
+	if err != nil {
+		t.Fatalf("ParseTransactions failed: %v", err)
+	}
+
+	want := []struct {
+		date     string
+		amount   float64
+		method   string
+		lastFour string
+		isRefund bool
+		status   string
+	}{
+		{"2026-10-03", 31.24, "Prime Visa ****4242", "4242", true, "Completed"},
+		{"2026-10-03", 11.15, "Amazon Visa points", "", true, "Completed"},
+		{"2026-09-28", 31.24, "Prime Visa ****4242", "4242", false, "Completed"},
+		{"2026-09-27", 11.15, "Amazon Visa points", "", false, "Completed"},
+		{"2026-10-05", 8.00, "Prime Visa ****4242", "4242", false, "In Progress"},
+	}
+	if len(transactions) != len(want) {
+		t.Fatalf("got %d transactions, want %d", len(transactions), len(want))
+	}
+	for i, w := range want {
+		tx := transactions[i]
+		if got := tx.Date.Format("2006-01-02"); got != w.date {
+			t.Errorf("transaction %d date = %s, want %s", i, got, w.date)
+		}
+		if tx.Amount != w.amount {
+			t.Errorf("transaction %d amount = %.2f, want %.2f", i, tx.Amount, w.amount)
+		}
+		if tx.PaymentMethod != w.method {
+			t.Errorf("transaction %d payment method = %q, want %q", i, tx.PaymentMethod, w.method)
+		}
+		if tx.LastFour != w.lastFour {
+			t.Errorf("transaction %d last four = %q, want %q", i, tx.LastFour, w.lastFour)
+		}
+		if tx.IsRefund != w.isRefund {
+			t.Errorf("transaction %d IsRefund = %v, want %v", i, tx.IsRefund, w.isRefund)
+		}
+		if tx.Status != w.status {
+			t.Errorf("transaction %d status = %q, want %q", i, tx.Status, w.status)
+		}
+		if tx.OrderID != "111-1111111-1111111" {
+			t.Errorf("transaction %d order ID = %q", i, tx.OrderID)
+		}
+		if tx.Merchant != "" && tx.Merchant != "AMZN Mktp US" {
+			t.Errorf("transaction %d merchant = %q", i, tx.Merchant)
+		}
+	}
+}

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-13
+
+### Added
+- Added `Transaction.IsRefund`, set when Amazon lists a payment-method credit (`+$31.24`, "Refund: Order #...") so callers can tell refunds from charges and see how a refund was divided between a card and points or gift-card balance. `Amount` remains positive.
+
+### Fixed
+- `ParseTransactions` no longer reports refund rows as additional charges for the order.
+- `ParseTransactions` now dates each transaction from its own date heading. Previously every transaction on the page took the last date listed, so later charges and refunds carried the earliest charge's date.
+- `Transaction.Status` now reflects the section a transaction is listed under instead of the last section on the page.
+
 ## [0.4.0] - 2026-07-25
 
 ### Added

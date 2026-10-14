@@ -558,46 +558,33 @@ func (p *Parser) ParseTransactions(r io.Reader) ([]*Transaction, error) {
 	var currentStatus string
 	var currentDate time.Time
 
-	// Find status headers (e.g., "Completed", "Pending")
-	doc.Find(".apx-transactions-sleeve-header-container").Each(func(j int, header *goquery.Selection) {
-		statusText := strings.TrimSpace(header.Find(".a-text-bold").Text())
-		if statusText != "" {
-			currentStatus = statusText
+	// Walk status headers, date containers, and line items in document order so
+	// each line item takes the status and date that most recently preceded it.
+	// Line items are not siblings of their date container, so the date cannot be
+	// found by looking at a line item's own preceding siblings.
+	doc.Find(".apx-transactions-sleeve-header-container, .apx-transaction-date-container, .apx-transactions-line-item-component-container").Each(func(j int, node *goquery.Selection) {
+		if node.HasClass("apx-transactions-sleeve-header-container") {
+			if statusText := strings.TrimSpace(node.Find(".a-text-bold").Text()); statusText != "" {
+				currentStatus = statusText
+			}
+			return
 		}
-	})
+		if node.HasClass("apx-transaction-date-container") {
+			dateText := strings.TrimSpace(node.Find("span").Text())
+			if dateText == "" {
+				dateText = strings.TrimSpace(node.Text())
+			}
+			if date, err := parseAmazonDate(dateText); err == nil {
+				currentDate = date
+			}
+			return
+		}
 
-	// Process date containers and their associated transactions
-	// Each date container is followed by transaction line items
-	doc.Find(".apx-transaction-date-container").Each(func(j int, dateDiv *goquery.Selection) {
-		dateText := strings.TrimSpace(dateDiv.Find("span").Text())
-		if dateText == "" {
-			dateText = strings.TrimSpace(dateDiv.Text())
-		}
-		if date, err := parseAmazonDate(dateText); err == nil {
-			currentDate = date
-		}
-	})
-
-	// Look for transaction line items
-	doc.Find(".apx-transactions-line-item-component-container").Each(func(j int, lineItem *goquery.Selection) {
+		lineItem := node
 		tx := &Transaction{
 			Status: currentStatus,
 			Date:   currentDate,
 		}
-
-		// Find the date by looking at the preceding date container
-		// Walk up to find the parent section and then find date within it
-		lineItem.PrevAll().Each(func(k int, prev *goquery.Selection) {
-			if prev.HasClass("apx-transaction-date-container") {
-				dateText := strings.TrimSpace(prev.Find("span").Text())
-				if dateText == "" {
-					dateText = strings.TrimSpace(prev.Text())
-				}
-				if date, err := parseAmazonDate(dateText); err == nil {
-					tx.Date = date
-				}
-			}
-		})
 
 		// Extract payment method (e.g., "Prime Visa ****1211")
 		lineItem.Find("[data-pmts-component-id]").Each(func(k int, row *goquery.Selection) {
@@ -608,11 +595,13 @@ func (p *Parser) ParseTransactions(r io.Reader) ([]*Transaction, error) {
 				tx.CardType, tx.LastFour = parsePaymentMethod(paymentMethod)
 			}
 
-			// Amount is in the last column with bold text (negative value like "-$44.91")
+			// Amount is in the last column with bold text: charges are shown
+			// negative ("-$44.91") and refunds positive ("+$44.91").
 			amountText := strings.TrimSpace(row.Find(".a-column.a-span3 .a-text-bold").Text())
 			if amountText != "" {
-				// Remove the negative sign and parse
-				amountText = strings.TrimPrefix(amountText, "-")
+				if strings.HasPrefix(amountText, "+") {
+					tx.IsRefund = true
+				}
 				tx.Amount = parsePrice(amountText)
 			}
 
@@ -623,6 +612,9 @@ func (p *Parser) ParseTransactions(r io.Reader) ([]*Transaction, error) {
 				}
 				// Also check link text for order ID
 				linkText := strings.TrimSpace(link.Text())
+				if strings.HasPrefix(linkText, "Refund:") {
+					tx.IsRefund = true
+				}
 				if tx.OrderID == "" && strings.Contains(linkText, "Order #") {
 					tx.OrderID = extractOrderIDFromText(linkText)
 				}
